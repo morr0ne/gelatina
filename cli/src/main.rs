@@ -1,6 +1,6 @@
 use clap::Parser;
 use color_eyre::Result;
-use gelatina::{Api, GlRegistry};
+use gelatina::{Api, GlProfile, GlRegistry};
 use std::{fs, path::PathBuf};
 
 /// A shitty generator
@@ -19,6 +19,8 @@ struct Args {
     /// Major version of the api
     #[clap(long, default_value = "4.6")]
     version: f32,
+    #[clap(long, default_value = "core")]
+    profile: GlProfile,
 }
 
 fn main() -> Result<()> {
@@ -27,8 +29,9 @@ fn main() -> Result<()> {
     let Args {
         registry,
         fetch,
-        api: _,
-        version: _,
+        api,
+        version,
+        profile,
     } = Args::parse();
 
     let xml = if let Some(path) = registry {
@@ -42,7 +45,8 @@ fn main() -> Result<()> {
         gelatina::GL_XML.to_string()
     };
 
-    let gl_registry = GlRegistry::parse(&xml)?;
+    let mut gl_registry = GlRegistry::parse(&xml)?;
+    gl_registry.reduce(api, version, profile);
 
     print!("{gl_registry}");
 

@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use roxmltree::Document;
-use std::{fmt::Display, str::FromStr};
+use std::{collections::HashSet, fmt::Display, str::FromStr};
 
 /// OpenGL registry file exported as a constant. Last fetched from https://github.com/KhronosGroup/OpenGL-Registry/raw/main/xml/gl.xml on 22/05/2022
 pub const GL_XML: &str = include_str!("gl.xml");
@@ -14,12 +14,36 @@ const KEYWORDS: [&str; 51] = [
     "override", "priv", "typeof", "unsized", "virtual", "yield", "try",
 ];
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Api {
     Gl,
     Gles1,
     Gles2,
     Glsc2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum GlProfile {
+    Core,
+    Compatibility,
+    Common,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Invalid api")]
+pub struct GlProfileFromStrError;
+
+impl FromStr for GlProfile {
+    type Err = GlProfileFromStrError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "core" => Ok(Self::Core),
+            "compatibility" => Ok(Self::Compatibility),
+            "common" => Ok(Self::Common),
+            _ => Err(GlProfileFromStrError),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -83,6 +107,8 @@ pub struct GlFeature {
 }
 
 pub struct GlRequire {
+    pub gl_profile: Option<GlProfile>,
+    pub api: Option<Api>,
     pub gl_enums: Vec<String>,
     pub gl_commands: Vec<String>,
 }
@@ -91,6 +117,8 @@ pub struct GlExtension {}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
+    #[error("")]
+    Profile(#[from] GlProfileFromStrError),
     #[error("")]
     Api(#[from] ApiFromStrError),
     #[error("")]
@@ -258,14 +286,18 @@ impl GlRegistry {
                         let api = node.attribute("api").unwrap().parse()?;
                         let version = node.attribute("number").unwrap().parse().unwrap();
                         let mut gl_require = Vec::new();
-                        let gl_remove = Vec::new();
+                        let mut gl_remove = Vec::new();
 
                         for gl_feature in node.children() {
                             match gl_feature.tag_name().name() {
                                 "require" => {
-                                    // let gl_remove = Vec::new();
                                     let mut gl_enums = Vec::new();
                                     let mut gl_commands = Vec::new();
+                                    let api =
+                                        gl_feature.attribute("api").map(|api| api.parse().unwrap());
+                                    let gl_profile = gl_feature
+                                        .attribute("profile")
+                                        .map(|profile| profile.parse().unwrap());
 
                                     for gl_require in gl_feature.children() {
                                         match gl_require.tag_name().name() {
@@ -290,9 +322,46 @@ impl GlRegistry {
                                     gl_require.push(GlRequire {
                                         gl_enums,
                                         gl_commands,
+                                        gl_profile,
+                                        api,
                                     })
                                 }
-                                "remove" => {}
+                                "remove" => {
+                                    let mut gl_enums = Vec::new();
+                                    let mut gl_commands = Vec::new();
+                                    let api =
+                                        gl_feature.attribute("api").map(|api| api.parse().unwrap());
+                                    let gl_profile = gl_feature
+                                        .attribute("profile")
+                                        .map(|profile| profile.parse().unwrap());
+
+                                    for gl_require in gl_feature.children() {
+                                        match gl_require.tag_name().name() {
+                                            "enum" => {
+                                                let gl_enum = gl_require.attribute("name").unwrap();
+                                                gl_enums.push(gl_enum.to_string());
+                                            }
+                                            "command" => {
+                                                let gl_command =
+                                                    gl_require.attribute("name").unwrap();
+                                                gl_commands.push(gl_command.to_string())
+                                            }
+                                            "type" => {}
+                                            name => {
+                                                if !name.is_empty() {
+                                                    panic!("Unknown req {name}")
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    gl_remove.push(GlRequire {
+                                        gl_enums,
+                                        gl_commands,
+                                        gl_profile,
+                                        api,
+                                    })
+                                }
                                 name => {
                                     if !name.is_empty() {
                                         panic!("Unknown req {name}")
@@ -320,29 +389,62 @@ impl GlRegistry {
             gl_extensions,
         })
     }
+
+    // TODO: This code is horribily inefficient, it literaly takes seconds to execute in debug mode. I'll fix it as some point but it works for now.
+    pub fn reduce(&mut self, api: Api, version: f32, profile: GlProfile) {
+        self.gl_features
+            .retain(|gl_feature| gl_feature.api == api && gl_feature.version <= version);
+
+        let mut required_enums: HashSet<&String> = HashSet::new();
+        let mut required_commands: HashSet<&String> = HashSet::new();
+
+        for gl_feature in &self.gl_features {
+            for gl_require in &gl_feature.gl_require {
+                if (gl_require.gl_profile.is_none() || gl_require.gl_profile == Some(profile))
+                    && (gl_require.api.is_none() || gl_require.api == Some(api))
+                {
+                    required_enums.extend(&gl_require.gl_enums);
+                    required_commands.extend(&gl_require.gl_commands);
+                }
+            }
+
+            for gl_remove in &gl_feature.gl_remove {
+                if (gl_remove.gl_profile.is_none() || gl_remove.gl_profile == Some(profile))
+                    && (gl_remove.api.is_none() || gl_remove.api == Some(api))
+                {
+                    required_enums
+                        .retain(|required_enum| !gl_remove.gl_enums.contains(required_enum));
+                    required_commands.retain(|required_command| {
+                        !gl_remove.gl_commands.contains(required_command)
+                    });
+                }
+            }
+        }
+
+        self.gl_commands
+            .retain(|gl_command| required_commands.contains(&&gl_command.name));
+
+        self.gl_enums
+            .retain(|gl_enum| required_enums.contains(&&gl_enum.name));
+    }
 }
 
 impl Display for GlRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let formated_enums = &self.gl_enums.iter().format_with("\n", |gl_enum, f| {
-            // TODO: GL_ACTIVE_PROGRAM_EXT is defined multiple times. This a quick hack to generate at least the gl 4.6 api.
-            if gl_enum.name == "GL_ACTIVE_PROGRAM_EXT" {
-                f(&"")
+            let enum_type = if gl_enum.bitmask {
+                "GLbitfield"
+            } else if gl_enum.value == "0xFFFFFFFFFFFFFFFF" {
+                "u64"
             } else {
-                let enum_type = if gl_enum.bitmask {
-                    "GLbitfield"
-                } else if gl_enum.value == "0xFFFFFFFFFFFFFFFF" {
-                    "u64"
-                } else {
-                    "GLenum"
-                };
+                "GLenum"
+            };
 
-                f(&format_args!(
-                    "pub const {enum_name}: {enum_type} = {enum_value};",
-                    enum_name = gl_enum.name,
-                    enum_value = gl_enum.value
-                ))
-            }
+            f(&format_args!(
+                "pub const {enum_name}: {enum_type} = {enum_value};",
+                enum_name = gl_enum.name,
+                enum_value = gl_enum.value
+            ))
         });
 
         let formated_fields = &self.gl_commands.iter().format_with(",\n", |gl_command, f| {
@@ -511,7 +613,6 @@ pub mod types {{
 pub use enums::*;
 pub mod enums {{
 use super::*;
-pub const GL_ACTIVE_PROGRAM_EXT: GLenum = 0x8B8D;
 {formated_enums}
 }}
 
