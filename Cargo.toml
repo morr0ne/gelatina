@@ -1,14 +1,5 @@
-[package]
-name = "gelatina"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-color-eyre = "0.6.1"
-clap = { version = "3.1.14", features = ["color", "derive", "unicode", "suggestions", "wrap_help"] }
-roxmltree = "0.14.1"
-reqwest = { version = "0.11.10", features = ["blocking", "native-tls-vendored"]}
-itertools = "0.10.3"
+[workspace]
+members = ["cli", "lib"]
 
 [profile.release]
 lto = true

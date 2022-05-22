@@ -1,8 +1,6 @@
-use clap::Parser;
-use color_eyre::Result;
 use itertools::Itertools;
 use roxmltree::Document;
-use std::{fmt::Display, fs, path::PathBuf, str::FromStr};
+use std::{fmt::Display, str::FromStr};
 
 /// A list of all keywords reserved by the language.
 const KEYWORDS: [&str; 51] = [
@@ -12,21 +10,6 @@ const KEYWORDS: [&str; 51] = [
     "while", "async", "await", "dyn", "abstract", "become", "box", "do", "final", "macro",
     "override", "priv", "typeof", "unsized", "virtual", "yield", "try",
 ];
-
-/// A shitty generator
-#[derive(Parser, Debug)]
-#[clap(author, version, about, long_about = None)]
-struct Args {
-    /// Path to the gl.xml file, if not provided the latest one will be download from https://github.com/KhronosGroup/OpenGL-Registry/raw/main/xml/gl.xml
-    #[clap(short, long)]
-    registry: Option<PathBuf>,
-    /// Which api to use. One of gl, gles1, gles2 or glsc2
-    #[clap(short, long, default_value = "gl")]
-    api: Api,
-    /// Major version of the api
-    #[clap(long, default_value = "4.6")]
-    version: f32,
-}
 
 #[derive(Debug)]
 pub enum Api {
@@ -64,6 +47,8 @@ impl Api {
 pub struct GlRegistry {
     pub gl_enums: Vec<GlEnum>,
     pub gl_commands: Vec<GlCommand>,
+    pub gl_features: Vec<GlFeature>,
+    pub gl_extensions: Vec<GlExtension>,
 }
 
 pub struct GlEnum {
@@ -83,33 +68,26 @@ pub struct GlParam {
     pub name: String,
 }
 
-fn main() -> Result<()> {
-    color_eyre::install()?;
+pub struct GlFeature {
+    pub api: Api,
+}
 
-    let Args { registry, .. } = Args::parse();
+pub struct GlExtension {}
 
-    let xml = if let Some(path) = registry {
-        fs::read_to_string(path)?
-    } else {
-        reqwest::blocking::get(
-            "https://github.com/KhronosGroup/OpenGL-Registry/raw/main/xml/gl.xml",
-        )?
-        .text()?
-    };
-
-    let gl_registry = GlRegistry::parse(&xml)?;
-
-    print!("{gl_registry}");
-
-    Ok(())
+#[derive(Debug, thiserror::Error)]
+pub enum ParseError {
+    #[error("")]
+    Xml(#[from] roxmltree::Error),
 }
 
 impl GlRegistry {
-    pub fn parse(xml: &str) -> Result<Self> {
+    pub fn parse(xml: &str) -> Result<Self, ParseError> {
         let document = Document::parse(xml)?;
 
         let mut gl_enums = Vec::new();
         let mut gl_commands = Vec::new();
+        let mut gl_features = Vec::new();
+        let mut gl_extensions = Vec::new();
 
         for node in document.root().first_child().unwrap().children() {
             if node.is_element() {
@@ -268,6 +246,8 @@ impl GlRegistry {
         Ok(Self {
             gl_enums,
             gl_commands,
+            gl_features,
+            gl_extensions,
         })
     }
 }

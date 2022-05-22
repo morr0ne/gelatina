@@ -1,0 +1,9 @@
+[package]
+name = "gelatina"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+thiserror = "1.0.31"
+roxmltree = "0.14.1"
+itertools = "0.10.3"
