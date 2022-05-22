@@ -19,8 +19,12 @@ pub enum Api {
     Glsc2,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("Invalid api")]
+pub struct ApiFromStrError;
+
 impl FromStr for Api {
-    type Err = &'static str;
+    type Err = ApiFromStrError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
@@ -28,7 +32,7 @@ impl FromStr for Api {
             "gles1" => Ok(Self::Gles1),
             "gles2" => Ok(Self::Gles2),
             "glsc2" => Ok(Self::Glsc2),
-            _ => Err("Invalid api"),
+            _ => Err(ApiFromStrError),
         }
     }
 }
@@ -70,12 +74,22 @@ pub struct GlParam {
 
 pub struct GlFeature {
     pub api: Api,
+    pub version: f32,
+    pub gl_remove: Vec<GlRequire>,
+    pub gl_require: Vec<GlRequire>,
+}
+
+pub struct GlRequire {
+    pub gl_enums: Vec<String>,
+    pub gl_commands: Vec<String>,
 }
 
 pub struct GlExtension {}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
+    #[error("")]
+    Api(#[from] ApiFromStrError),
     #[error("")]
     Xml(#[from] roxmltree::Error),
 }
@@ -237,7 +251,60 @@ impl GlRegistry {
                             }
                         }
                     }
-                    "feature" => {}
+                    "feature" => {
+                        let api = node.attribute("api").unwrap().parse()?;
+                        let version = node.attribute("number").unwrap().parse().unwrap();
+                        let mut gl_require = Vec::new();
+                        let gl_remove = Vec::new();
+
+                        for gl_feature in node.children() {
+                            match gl_feature.tag_name().name() {
+                                "require" => {
+                                    // let gl_remove = Vec::new();
+                                    let mut gl_enums = Vec::new();
+                                    let mut gl_commands = Vec::new();
+
+                                    for gl_require in gl_feature.children() {
+                                        match gl_require.tag_name().name() {
+                                            "enum" => {
+                                                let gl_enum = gl_require.attribute("name").unwrap();
+                                                gl_enums.push(gl_enum.to_string());
+                                            }
+                                            "command" => {
+                                                let gl_command =
+                                                    gl_require.attribute("name").unwrap();
+                                                gl_commands.push(gl_command.to_string())
+                                            }
+                                            "type" => {}
+                                            name => {
+                                                if !name.is_empty() {
+                                                    panic!("Unknown req {name}")
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    gl_require.push(GlRequire {
+                                        gl_enums,
+                                        gl_commands,
+                                    })
+                                }
+                                "remove" => {}
+                                name => {
+                                    if !name.is_empty() {
+                                        panic!("Unknown req {name}")
+                                    }
+                                }
+                            }
+                        }
+
+                        gl_features.push(GlFeature {
+                            api,
+                            version,
+                            gl_require,
+                            gl_remove,
+                        })
+                    }
                     _ => {}
                 }
             }
