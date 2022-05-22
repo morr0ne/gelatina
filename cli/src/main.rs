@@ -7,9 +7,12 @@ use std::{fs, path::PathBuf};
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
-    /// Path to the gl.xml file, if not provided the latest one will be download from https://github.com/KhronosGroup/OpenGL-Registry/raw/main/xml/gl.xml
-    #[clap(short, long)]
+    /// Path to the gl.xml file
+    #[clap(short, long, conflicts_with = "fetch")]
     registry: Option<PathBuf>,
+    /// Fetch the latest version from https://github.com/KhronosGroup/OpenGL-Registry/raw/main/xml/gl.xml
+    #[clap(short, long, conflicts_with = "registry")]
+    fetch: bool,
     /// Which api to use. One of gl, gles1, gles2 or glsc2
     #[clap(short, long, default_value = "gl")]
     api: Api,
@@ -21,15 +24,22 @@ struct Args {
 fn main() -> Result<()> {
     color_eyre::install()?;
 
-    let Args { registry, .. } = Args::parse();
+    let Args {
+        registry,
+        fetch,
+        api: _,
+        version: _,
+    } = Args::parse();
 
     let xml = if let Some(path) = registry {
         fs::read_to_string(path)?
-    } else {
+    } else if fetch {
         reqwest::blocking::get(
             "https://github.com/KhronosGroup/OpenGL-Registry/raw/main/xml/gl.xml",
         )?
         .text()?
+    } else {
+        gelatina::GL_XML.to_string()
     };
 
     let gl_registry = GlRegistry::parse(&xml)?;
