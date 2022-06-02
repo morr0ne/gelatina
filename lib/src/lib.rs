@@ -475,11 +475,31 @@ impl Display for GlRegistry {
         });
 
         let formated_methods = &self.gl_commands.iter().format_with("\n", |gl_command, f| {
+            let mut brackets = String::new();
+
+            for gl_param in &gl_command.gl_params {
+                match gl_param.gl_type.as_str() {
+                    "GLenum" => brackets.push_str("{:#X}, "),
+                    gl_type => {
+                        if gl_type.contains('*') {
+                            brackets.push_str("{:p}, ")
+                        } else {
+                            brackets.push_str("{:?}, ")
+                        }
+                    }
+                }
+            }
+
+            brackets.pop();
+            brackets.pop();
+
             f(&format_args!(
-                "pub unsafe fn {function_name}(&self,{function_parameters}){function_return_type}
+                r#"pub unsafe fn {function_name}(&self,{function_parameters}){function_return_type}
                 {{
+                    #[cfg(all(debug_assertions, feature = "tracing", feature = "trace-calls"))]
+                    trace!("Calling gl{function_name}({brackets})", {trace_parameters});
                     (self.{inner_function})({inner_function_parameters})
-                }}",
+                }}"#,
                 function_name = gl_command.name.replacen("gl", "", 1),
                 function_parameters =
                     &gl_command
@@ -491,6 +511,16 @@ impl Display for GlRegistry {
                         ))),
                 function_return_type = gl_command.return_type,
                 inner_function = gl_command.name,
+                trace_parameters = &gl_command.gl_params.iter().format_with(",", |gl_param, f| {
+                    if gl_param.gl_type == "GLDEBUGPROC" {
+                        f(&format_args!(
+                            "transmute::<_, Option<fn()>>({})",
+                            gl_param.name
+                        ))
+                    } else {
+                        f(&gl_param.name)
+                    }
+                }),
                 inner_function_parameters = &gl_command
                     .gl_params
                     .iter()
@@ -506,7 +536,11 @@ impl Display for GlRegistry {
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::upper_case_acronyms)]
+
 use std::{{error::Error, ffi::CStr, fmt::Display, mem::transmute, os::raw::*}};
+
+#[cfg(all(feature = "tracing", feature = "trace-calls"))]
+use tracing::{{error, trace}};
 
 pub type Result<T, E = LoadError> = std::result::Result<T, E>;
 
